@@ -1,0 +1,48 @@
+name: Tag Lean
+
+# A release is a commit on `main` that carries a Lean version no tag names yet. The tag is the
+# Lean version it audits under, so `rev = "v4.34.0"` downstream means "the audit, under Lean
+# v4.34.0". Anything else that lands between two releases is picked up by its commit instead.
+#
+# Idempotent: a tag that already exists is left alone, so a hand-written one wins and a rerun
+# costs nothing.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lean-toolchain
+  workflow_dispatch:
+
+concurrency:
+  group: tag-lean
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag the Lean version
+    if: github.repository == 'FormalizedFormalLogic/forgive'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(cut -d: -f2 < lean-toolchain)
+          case $tag in
+            v[0-9]*) ;;
+            *) echo "::error::the toolchain '$(cat lean-toolchain)' has no version to tag"; exit 1 ;;
+          esac
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "$tag exists already; leaving it where it is"
+            exit 0
+          fi
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" --jq .ref
+          echo "tagged $GITHUB_SHA as $tag"
