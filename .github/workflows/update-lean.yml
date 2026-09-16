@@ -1,0 +1,215 @@
+name: Update Lean
+
+# Every six hours (and on demand) `main` is moved to the newest stable Lean release, on a single
+# long-lived branch behind one pull request labelled `update-lean`. Only the pins move: whatever
+# the new toolchain breaks is fixed by hand inside that same pull request.
+#
+# Pushes made with `github.token` do not start `ci.yml`, and `main` requires its check, so the
+# branch and the pull request belong to the `ffl-automaton` GitHub App instead: the organization
+# variable `BOT_APP_ID` and the secret `BOT_APP_PRIVATE_KEY` (contents and pull requests: write;
+# issues: write, for the label). The App has to be installed on this repository.
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+# A run pushes to a shared branch, so runs never overlap; a scheduled run behind a manual one
+# waits rather than dies, because it may carry a newer release.
+concurrency:
+  group: update-lean
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  BRANCH: update-lean
+  LABEL: update-lean
+  CLI: https://github.com/leanprover/lean4-cli
+
+jobs:
+  update:
+    name: Bump the toolchain
+    # Nothing to do in a fork, whose pull requests go to its own default branch.
+    if: github.repository == 'FormalizedFormalLogic/forgive'
+    runs-on: ubuntu-latest
+    steps:
+      # An installation token, revoked when the job ends. Skipped, and `github.token` used, where
+      # the App is not installed — a fork, or before the App exists.
+      - name: Mint the app token
+        id: app-token
+        if: vars.BOT_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      # Full history: the existing branch is fetched below, and its tip is what the push leases.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      # One pull request carries the bump at a time; a second one would race this branch.
+      - name: Find the open pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --state open --label "$LABEL" --limit 1 --json number,headRefName)
+          number=$(echo "$pr" | jq -r '.[0].number // ""')
+          head=$(echo "$pr" | jq -r '.[0].headRefName // ""')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "head=${head:-$BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "found the pull request: ${number:-none} (branch ${head:-$BRANCH})"
+
+      # An open pull request's branch is built on top of, never rewritten: the fixes pushed for
+      # the previous bump live there. Without one, the branch restarts from `main`.
+      - name: Prepare the branch
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_REF: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PR_NUMBER" ]; then
+            git fetch origin "+refs/heads/$HEAD_REF:refs/remotes/origin/$HEAD_REF"
+            git switch --force-create "$HEAD_REF" "origin/$HEAD_REF"
+          else
+            git switch --force-create "$BRANCH" origin/main
+          fi
+
+      # `/releases/latest` skips prereleases, so release candidates are never picked up.
+      - name: Resolve the release
+        id: lean
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          lean=$(gh api repos/leanprover/lean4/releases/latest --jq .tag_name)
+          old=$(cut -d: -f2 < lean-toolchain)
+          echo "lean=$lean" >> "$GITHUB_OUTPUT"
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          if [ "$lean" = "$old" ]; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "the branch is already on $lean; nothing to do"
+            exit 0
+          fi
+          echo "stale=true" >> "$GITHUB_OUTPUT"
+          echo "the branch is on $old; the newest release is $lean"
+
+      # lean4-cli tags every `x.y.0` and nothing else, so a Lean patch release keeps the `x.y.0`
+      # tag. `lake update` never lowers the toolchain, so the newer `lean-toolchain` written
+      # below survives the older toolchain that tag carries.
+      - name: Resolve the lean4-cli tag
+        id: cli
+        if: steps.lean.outputs.stale == 'true'
+        env:
+          LEAN: ${{ steps.lean.outputs.lean }}
+        run: |
+          set -euo pipefail
+          exists() { git ls-remote --exit-code --tags "$CLI" "refs/tags/$1" >/dev/null 2>&1; }
+          if exists "$LEAN"; then
+            tag=$LEAN
+          elif exists "v${LEAN%.*}.0"; then
+            tag="v${LEAN%.*}.0"
+          else
+            echo "::warning::lean4-cli has no tag for $LEAN yet; leaving the pins alone"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "lean4-cli is pinned at $tag"
+
+      # Written before lake runs, so that lake runs under the toolchain it is resolving for.
+      - name: Bump the pins
+        if: steps.cli.outputs.found == 'true'
+        env:
+          LEAN: ${{ steps.lean.outputs.lean }}
+          TAG: ${{ steps.cli.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "leanprover/lean4:$LEAN" > lean-toolchain
+          sed -i "s|^version = \"git#v.*\"$|version = \"git#$TAG\"|" lakefile.toml
+          grep -q "git#$TAG" lakefile.toml
+          echo "the toolchain is $(cat lean-toolchain)"
+
+      - name: Install elan
+        if: steps.cli.outputs.found == 'true'
+        uses: leanprover/lean-action@v1
+        with:
+          build: false
+          use-github-cache: false
+
+      # The test packages require this one by path and inherit lean4-cli through it, so their
+      # manifests pin it too. `lake update` writes them a `lean-toolchain`; they are meant to
+      # resolve this one's, so those are thrown away.
+      - name: Update the manifests
+        if: steps.cli.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          lake update
+          for pkg in test/*/lakefile.toml; do
+            (cd "$(dirname "$pkg")" && lake update)
+          done
+          rm -f test/*/lean-toolchain
+
+      - name: Commit and push
+        id: push
+        if: steps.cli.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_REF: ${{ steps.pr.outputs.head }}
+          LEAN: ${{ steps.lean.outputs.lean }}
+        run: |
+          set -euo pipefail
+          # The commit is attributed to the identity that pushes it, whose noreply address is
+          # built from the bot account's user id.
+          author=${APP_SLUG:+${APP_SLUG}[bot]}
+          author=${author:-github-actions[bot]}
+          git config user.name "$author"
+          git config user.email "$(gh api "/users/${author//\[bot\]/%5Bbot%5D}" --jq .id)+$author@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "the pins did not move; nothing to push"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -a -m "update: Lean $LEAN"
+          if [ -n "$PR_NUMBER" ]; then
+            # Never a rewrite: the branch carries the fixes pushed for the previous bump.
+            git push origin "HEAD:refs/heads/$HEAD_REF"
+          else
+            # No pull request points at the branch, so a leftover one is replaced, against the
+            # tip fetched at checkout.
+            git push --force-with-lease origin "HEAD:$BRANCH"
+          fi
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # The title becomes the commit subject on `main`, and `tag-lean.yml` turns that commit into
+      # the release tag, so it names the release that landed.
+      - name: Open or refresh the pull request
+        if: steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          LEAN: ${{ steps.lean.outputs.lean }}
+          OLD: ${{ steps.lean.outputs.old }}
+          TAG: ${{ steps.cli.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="update: Lean $LEAN"
+          body=$(cat <<EOF
+          Moves the toolchain from \`$OLD\` to [\`$LEAN\`](https://github.com/leanprover/lean4/releases/tag/$LEAN) and lean4-cli to \`$TAG\`.
+
+          Opened by \`.github/workflows/update-lean.yml\`, which moves the pins only; anything the release breaks is fixed in this pull request. Merging it tags \`main\` as \`$LEAN\`. This body is rewritten on every run; leave notes in a comment.
+          EOF
+          )
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --title "$title" --body "$body"
+          else
+            gh pr create --base main --head "$BRANCH" --label "$LABEL" --title "$title" --body "$body"
+          fi

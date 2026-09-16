@@ -16,8 +16,8 @@ same audit with one flat `--allow` list. Use that if a flat list is all you need
 # lakefile.toml
 [[require]]
 name = "Forgive"
-git = "https://github.com/FormalizedFormalLogic/Forgive"
-rev = "<commit>"
+git = "https://github.com/FormalizedFormalLogic/forgive"
+rev = "v4.34.0"
 ```
 
 ```bash
@@ -36,6 +36,18 @@ A declaration is audited when the module defining it is a root or one of its sub
 It exits `0` when clean, `1` on violations or a bad allowlist, and `2` on bad usage or an
 environment that failed to load. The command line is
 [lean4-cli](https://github.com/leanprover/lean4-cli)'s; `forgive -h` prints the help.
+
+## Versions
+
+The audit reads the oleans and Lean's own internals, so it runs only under the Lean it was built
+for. `main` follows the newest stable release: `update-lean.yml` opens the bump, and merging it
+tags that commit with the Lean version it audits under. Require the tag your toolchain is on.
+
+```toml
+rev = "v4.34.0"   # the audit, under Lean v4.34.0
+```
+
+Between two releases there is no tag. To take something that landed since, require its commit.
 
 ## `forgive.yml`
 
