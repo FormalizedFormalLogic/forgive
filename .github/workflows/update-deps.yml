@@ -1,7 +1,7 @@
-name: Update Lean
+name: Update deps
 
 # Every six hours (and on demand) `main` is moved to the newest stable Lean release, on a single
-# long-lived branch behind one pull request labelled `update-lean`. Only the pins move: whatever
+# long-lived branch behind one pull request labelled `update-deps`. Only the pins move: whatever
 # the new toolchain breaks is fixed by hand inside that same pull request.
 #
 # Pushes made with `github.token` do not start `ci.yml`, and `main` requires its check, so the
@@ -16,7 +16,7 @@ on:
 # A run pushes to a shared branch, so runs never overlap; a scheduled run behind a manual one
 # waits rather than dies, because it may carry a newer release.
 concurrency:
-  group: update-lean
+  group: update-deps
   cancel-in-progress: false
 
 permissions:
@@ -24,8 +24,8 @@ permissions:
   pull-requests: write
 
 env:
-  BRANCH: update-lean
-  LABEL: update-lean
+  BRANCH: update-deps
+  LABEL: update-deps
   CLI: https://github.com/leanprover/lean4-cli
 
 jobs:
@@ -205,7 +205,7 @@ jobs:
           body=$(cat <<EOF
           Moves the toolchain from \`$OLD\` to [\`$LEAN\`](https://github.com/leanprover/lean4/releases/tag/$LEAN) and lean4-cli to \`$TAG\`.
 
-          Opened by \`.github/workflows/update-lean.yml\`, which moves the pins only; anything the release breaks is fixed in this pull request. Merging it tags \`main\` as \`$LEAN\`. This body is rewritten on every run; leave notes in a comment.
+          Opened by \`.github/workflows/update-deps.yml\`, which moves the pins only; anything the release breaks is fixed in this pull request. Merging it tags \`main\` as \`$LEAN\`. This body is rewritten on every run; leave notes in a comment.
           EOF
           )
           if [ -n "$PR_NUMBER" ]; then

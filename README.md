@@ -40,7 +40,7 @@ environment that failed to load. The command line is
 ## Versions
 
 The audit reads the oleans and Lean's own internals, so it runs only under the Lean it was built
-for. `main` follows the newest stable release: `update-lean.yml` opens the bump, and merging it
+for. `main` follows the newest stable release: `update-deps.yml` opens the bump, and merging it
 tags that commit with the Lean version it audits under. Require the tag your toolchain is on.
 
 ```toml
