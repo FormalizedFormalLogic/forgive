@@ -5,7 +5,7 @@ defaultTargets = ["Forgive", "forgive"]
 [[require]]
 name = "Cli"
 scope = "leanprover"
-version = "git#v4.35.0-rc2"
+version = "git#v4.34.0"
 
 [[lean_lib]]
 name = "Forgive"
