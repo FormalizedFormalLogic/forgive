@@ -1,8 +1,8 @@
 name: Update deps
 
-# Every six hours (and on demand) `main` is moved to the newest stable Lean release, on a single
-# long-lived branch behind one pull request labelled `update-deps`. Only the pins move: whatever
-# the new toolchain breaks is fixed by hand inside that same pull request.
+# Every six hours (and on demand) `main` is moved to the newest Lean release, release candidates
+# included, on a single long-lived branch behind one pull request labelled `update-deps`. Only the
+# pins move: whatever the new toolchain breaks is fixed by hand inside that same pull request.
 #
 # Pushes made with `github.token` do not start `ci.yml`, and `main` requires its check, so the
 # branch and the pull request belong to the `ffl-automaton` GitHub App instead: the organization
@@ -80,14 +80,15 @@ jobs:
             git switch --force-create "$BRANCH" origin/main
           fi
 
-      # `/releases/latest` skips prereleases, so release candidates are never picked up.
+      # `/releases` lists every release newest-first by `created_at`, prereleases included, so a
+      # release candidate is picked up as soon as it ships.
       - name: Resolve the release
         id: lean
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          lean=$(gh api repos/leanprover/lean4/releases/latest --jq .tag_name)
+          lean=$(gh api repos/leanprover/lean4/releases --jq '.[0].tag_name')
           old=$(cut -d: -f2 < lean-toolchain)
           echo "lean=$lean" >> "$GITHUB_OUTPUT"
           echo "old=$old" >> "$GITHUB_OUTPUT"
