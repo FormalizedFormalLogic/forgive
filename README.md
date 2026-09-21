@@ -84,3 +84,7 @@ statements, ranked by how many audited declarations reach them.
 ```bash
 just test
 ```
+
+## LICENSE
+
+[Apache License 2.0](LICENSE)
